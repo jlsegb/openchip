@@ -109,7 +109,9 @@ func (s *Store) ConsumeMagicLink(ctx context.Context, token string) (model.Owner
 	if err != nil {
 		return model.Owner{}, err
 	}
-	defer tx.Rollback(c)
+	defer func() {
+		_ = tx.Rollback(c)
+	}()
 
 	hashed := hashToken(token)
 	var linkID, storedHash string
@@ -365,7 +367,9 @@ func (s *Store) ApproveTransfer(ctx context.Context, token string) error {
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback(c)
+	defer func() {
+		_ = tx.Rollback(c)
+	}()
 
 	var transferID, chipPK, fromOwnerID, toOwnerID string
 	err = tx.QueryRow(c, `
@@ -461,7 +465,9 @@ func (s *Store) AnonymizeOwner(ctx context.Context, ownerID string) error {
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback(c)
+	defer func() {
+		_ = tx.Rollback(c)
+	}()
 
 	var email string
 	if err := tx.QueryRow(c, `SELECT email FROM owners WHERE id = $1`, ownerID).Scan(&email); err != nil {

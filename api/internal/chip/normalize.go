@@ -88,7 +88,7 @@ func isDigits(value string) bool {
 
 func isHex(value string) bool {
 	for _, r := range value {
-		if !((r >= '0' && r <= '9') || (r >= 'A' && r <= 'F')) {
+		if (r < '0' || r > '9') && (r < 'A' || r > 'F') {
 			return false
 		}
 	}

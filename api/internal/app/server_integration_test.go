@@ -208,7 +208,7 @@ func TestShelterLookupRejectsInvalidAPIKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("do request: %v", err)
 	}
-	defer resp.Body.Close()
+	defer closeBody(t, resp)
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusUnauthorized)
 	}
@@ -290,7 +290,7 @@ func TestTransferExpiryRejectsExpiredToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("do request: %v", err)
 	}
-	defer respHTTP.Body.Close()
+	defer closeBody(t, respHTTP)
 	if respHTTP.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", respHTTP.StatusCode, http.StatusBadRequest)
 	}
@@ -309,7 +309,7 @@ func TestRateLimitingLookupReturns429OnSixtyFirstRequest(t *testing.T) {
 		if err != nil {
 			t.Fatalf("do request %d: %v", i, err)
 		}
-		resp.Body.Close()
+		closeBody(t, resp)
 		if i <= 60 && resp.StatusCode != http.StatusOK {
 			t.Fatalf("request %d status = %d, want 200", i, resp.StatusCode)
 		}
@@ -353,13 +353,13 @@ func TestMagicLinkSingleUseRejectedOnSecondAttempt(t *testing.T) {
 	if first.StatusCode != http.StatusOK {
 		t.Fatalf("first verify status = %d, want 200", first.StatusCode)
 	}
-	first.Body.Close()
+	closeBody(t, first)
 
 	second := rawGet(t, server, "/api/v1/auth/verify?token="+token, "")
 	if second.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("second verify status = %d, want 401", second.StatusCode)
 	}
-	second.Body.Close()
+	closeBody(t, second)
 }
 
 func TestAccountDeletionAnonymizesOwnerAndPreservesChipAndLookupRecords(t *testing.T) {
@@ -445,7 +445,7 @@ func rawGet(t *testing.T, server *httptest.Server, path, jwt string) *http.Respo
 func getJSON[T any](t *testing.T, server *httptest.Server, path, jwt string, wantStatus int) T {
 	t.Helper()
 	resp := rawGet(t, server, path, jwt)
-	defer resp.Body.Close()
+	defer closeBody(t, resp)
 	if resp.StatusCode != wantStatus {
 		body, _ := io.ReadAll(resp.Body)
 		t.Fatalf("status = %d, want %d, body=%s", resp.StatusCode, wantStatus, string(body))
@@ -456,20 +456,27 @@ func getJSON[T any](t *testing.T, server *httptest.Server, path, jwt string, wan
 func postJSON[T any](t *testing.T, server *httptest.Server, path, jwt string, body any, wantStatus int, extraHeaders map[string]string) T {
 	t.Helper()
 	resp := doJSONRequest(t, http.MethodPost, server, path, jwt, body, wantStatus, extraHeaders)
-	defer resp.Body.Close()
+	defer closeBody(t, resp)
 	return decodeEnvelope[T](t, resp.Body)
 }
 
 func postNoResp(t *testing.T, method string, server *httptest.Server, path, jwt string, body any, wantStatus int, extraHeaders map[string]string) {
 	t.Helper()
 	resp := doJSONRequest(t, method, server, path, jwt, body, wantStatus, extraHeaders)
-	defer resp.Body.Close()
+	defer closeBody(t, resp)
 }
 
 func deleteNoResp(t *testing.T, server *httptest.Server, path, jwt string, body any, wantStatus int) {
 	t.Helper()
 	resp := doJSONRequest(t, http.MethodDelete, server, path, jwt, body, wantStatus, nil)
-	defer resp.Body.Close()
+	defer closeBody(t, resp)
+}
+
+func closeBody(t *testing.T, resp *http.Response) {
+	t.Helper()
+	if err := resp.Body.Close(); err != nil {
+		t.Fatalf("close response body: %v", err)
+	}
 }
 
 func doJSONRequest(t *testing.T, method string, server *httptest.Server, path, jwt string, body any, wantStatus int, extraHeaders map[string]string) *http.Response {
@@ -492,7 +499,7 @@ func doJSONRequest(t *testing.T, method string, server *httptest.Server, path, j
 	}
 	if resp.StatusCode != wantStatus {
 		raw, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
+		closeBody(t, resp)
 		t.Fatalf("status = %d, want %d, body=%s", resp.StatusCode, wantStatus, string(raw))
 	}
 	return resp
