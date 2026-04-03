@@ -1,0 +1,989 @@
+openapi: 3.0.3
+info:
+  title: OpenChip API
+  version: 1.0.0
+  description: Public-good pet microchip registry API
+servers:
+  - url: http://localhost:8080
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    apiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+  schemas:
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+    Envelope:
+      type: object
+      properties:
+        data:
+          nullable: true
+        error:
+          allOf:
+            - $ref: '#/components/schemas/Error'
+          nullable: true
+    Health:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          example: ok
+    MagicLinkRequest:
+      type: object
+      required: [email]
+      properties:
+        email:
+          type: string
+          format: email
+        name:
+          type: string
+    MagicLinkResponse:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          example: sent
+    VerifyResponse:
+      type: object
+      required: [token, role]
+      properties:
+        token:
+          type: string
+        role:
+          type: string
+          enum: [owner, admin]
+    Owner:
+      type: object
+      required: [id, email, name, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        name:
+          type: string
+        phone:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    OwnerUpdateRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+        phone:
+          type: string
+          nullable: true
+    PetRequest:
+      type: object
+      required: [pet_name, species]
+      properties:
+        chip_id:
+          type: string
+          description: Required for create, ignored for update.
+        pet_name:
+          type: string
+        species:
+          type: string
+          enum: [dog, cat, other]
+        breed:
+          type: string
+          nullable: true
+        color:
+          type: string
+          nullable: true
+        date_of_birth:
+          type: string
+          format: date
+          nullable: true
+        notes:
+          type: string
+          nullable: true
+        photo_url:
+          type: string
+          nullable: true
+    Pet:
+      type: object
+      required:
+        [id, owner_id, chip_pk, chip_id_raw, chip_id_normalized, manufacturer_hint, pet_name, species, active, registered_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        owner_id:
+          type: string
+          format: uuid
+        chip_pk:
+          type: string
+          format: uuid
+        chip_id_raw:
+          type: string
+        chip_id_normalized:
+          type: string
+        manufacturer_hint:
+          type: string
+        pet_name:
+          type: string
+        species:
+          type: string
+        breed:
+          type: string
+          nullable: true
+        color:
+          type: string
+          nullable: true
+        date_of_birth:
+          type: string
+          format: date-time
+          nullable: true
+        notes:
+          type: string
+          nullable: true
+        photo_url:
+          type: string
+          nullable: true
+        active:
+          type: boolean
+        registered_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    PublicLookupRegistration:
+      type: object
+      required: [pet_name, species, owner_first_name, manufacturer_hint, contact_owner_via, contact_visibility]
+      properties:
+        pet_name:
+          type: string
+        species:
+          type: string
+        breed:
+          type: string
+          nullable: true
+        color:
+          type: string
+          nullable: true
+        owner_first_name:
+          type: string
+        manufacturer_hint:
+          type: string
+        contact_owner_via:
+          type: string
+          example: notification_request
+        contact_visibility:
+          type: string
+          example: protected
+    PublicLookupResponse:
+      type: object
+      required: [found, manufacturer_hint, registrations]
+      properties:
+        found:
+          type: boolean
+        manufacturer_hint:
+          type: string
+        registrations:
+          type: array
+          items:
+            $ref: '#/components/schemas/PublicLookupRegistration'
+    ShelterFoundRequest:
+      type: object
+      required: [chip_id, organization]
+      properties:
+        chip_id:
+          type: string
+        organization:
+          type: string
+        location:
+          type: string
+        notes:
+          type: string
+    ShelterLookupRegistration:
+      type: object
+      required: [pet_name, species, owner_name, manufacturer_hint]
+      properties:
+        pet_name:
+          type: string
+        species:
+          type: string
+        breed:
+          type: string
+          nullable: true
+        color:
+          type: string
+          nullable: true
+        owner_name:
+          type: string
+        owner_phone:
+          type: string
+          nullable: true
+        owner_email:
+          type: string
+          format: email
+          nullable: true
+        manufacturer_hint:
+          type: string
+    ShelterLookupResponse:
+      type: object
+      required: [found, manufacturer_hint, registrations]
+      properties:
+        found:
+          type: boolean
+        manufacturer_hint:
+          type: string
+        registrations:
+          type: array
+          items:
+            $ref: '#/components/schemas/ShelterLookupRegistration'
+    ContactOwnerResponse:
+      type: object
+      required: [sent]
+      properties:
+        sent:
+          type: boolean
+    TransferRequest:
+      type: object
+      required: [to_email]
+      properties:
+        to_email:
+          type: string
+          format: email
+        note:
+          type: string
+    TransferResponse:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+        token:
+          type: string
+    ExportResponse:
+      type: object
+      properties:
+        profile:
+          $ref: '#/components/schemas/Owner'
+        pets:
+          type: array
+          items:
+            $ref: '#/components/schemas/Pet'
+        lookups:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              chip_id_queried:
+                type: string
+              chip_id_normalized:
+                type: string
+              found:
+                type: boolean
+              looked_up_by_ip:
+                type: string
+                nullable: true
+              looked_up_by_agent:
+                type: string
+                nullable: true
+              notified_owner_at:
+                type: string
+                format: date-time
+                nullable: true
+              created_at:
+                type: string
+                format: date-time
+    DisputeRequest:
+      type: object
+      required: [chip_id, reporter_name, reporter_email, description]
+      properties:
+        chip_id:
+          type: string
+        reporter_name:
+          type: string
+        reporter_email:
+          type: string
+          format: email
+        description:
+          type: string
+    SimpleCreatedResponse:
+      type: object
+      properties:
+        created:
+          type: boolean
+    SimpleDeletedResponse:
+      type: object
+      properties:
+        deleted:
+          type: boolean
+    SimpleAnonymizedResponse:
+      type: object
+      properties:
+        anonymized:
+          type: boolean
+    LookupHistoryEntry:
+      type: object
+      properties:
+        id:
+          type: string
+        chip_id_queried:
+          type: string
+        chip_id_normalized:
+          type: string
+        found:
+          type: boolean
+        looked_up_by_ip:
+          type: string
+          nullable: true
+        looked_up_by_agent:
+          type: string
+          nullable: true
+        notified_owner_at:
+          type: string
+          format: date-time
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+    ManufacturerResponse:
+      type: object
+      required: [manufacturer_hint]
+      properties:
+        manufacturer_hint:
+          type: string
+    AAHALookupResponse:
+      type: object
+      properties:
+        chip_number:
+          type: string
+        manufacturer_hint:
+          type: string
+        match_found:
+          type: boolean
+        participating_data:
+          type: array
+          items:
+            type: object
+            properties:
+              registry:
+                type: string
+              manufacturer_hint:
+                type: string
+              contact_email:
+                type: string
+                format: email
+              contact_phone:
+                type: string
+                nullable: true
+    Dispute:
+      type: object
+      properties:
+        id:
+          type: string
+        chip_id:
+          type: string
+        reporter_email:
+          type: string
+          format: email
+        reporter_name:
+          type: string
+        description:
+          type: string
+        status:
+          type: string
+          enum: [open, reviewing, resolved]
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    DisputeUpdateRequest:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [open, reviewing, resolved]
+        resolution_note:
+          type: string
+    AdminStats:
+      type: object
+      properties:
+        total_chips:
+          type: integer
+        total_registrations:
+          type: integer
+        lookups_last_30_days:
+          type: integer
+        found_rate:
+          type: number
+          format: float
+        top_manufacturer_hints:
+          type: array
+          items:
+            type: object
+            properties:
+              manufacturer_hint:
+                type: string
+              count:
+                type: integer
+paths:
+  /health:
+    get:
+      summary: Health check
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - properties:
+                      data:
+                        $ref: '#/components/schemas/Health'
+        "503":
+          description: Database unavailable
+  /api/v1/lookup/{chip_id}:
+    get:
+      summary: Public chip lookup
+      parameters:
+        - name: chip_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Lookup result
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - properties:
+                      data:
+                        $ref: '#/components/schemas/PublicLookupResponse'
+  /api/v1/lookup/{chip_id}/manufacturer:
+    get:
+      summary: Chip manufacturer hint
+      parameters:
+        - name: chip_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Manufacturer hint
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - properties:
+                      data:
+                        $ref: '#/components/schemas/ManufacturerResponse'
+  /api/v1/lookup/{chip_id}/contact:
+    post:
+      summary: Request owner notification for a public lookup
+      parameters:
+        - name: chip_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Notification request accepted
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - properties:
+                      data:
+                        $ref: '#/components/schemas/ContactOwnerResponse'
+  /api/v1/auth/magic-link:
+    post:
+      summary: Send a magic link
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MagicLinkRequest'
+      responses:
+        "200":
+          description: Magic link sent
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - properties:
+                      data:
+                        $ref: '#/components/schemas/MagicLinkResponse'
+  /api/v1/auth/verify:
+    get:
+      summary: Verify magic link token
+      parameters:
+        - name: token
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: JWT issued
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - properties:
+                      data:
+                        $ref: '#/components/schemas/VerifyResponse'
+  /api/v1/auth/me:
+    get:
+      summary: Current owner profile
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Owner profile
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - properties:
+                      data:
+                        $ref: '#/components/schemas/Owner'
+    put:
+      summary: Update current owner profile
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OwnerUpdateRequest'
+      responses:
+        "200":
+          description: Updated owner profile
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - properties:
+                      data:
+                        $ref: '#/components/schemas/Owner'
+  /api/v1/pets:
+    get:
+      summary: List active owner pets
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Pet list
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/Pet'
+    post:
+      summary: Register a pet
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PetRequest'
+      responses:
+        "201":
+          description: Pet created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - properties:
+                      data:
+                        $ref: '#/components/schemas/Pet'
+  /api/v1/pets/{pet_id}:
+    get:
+      summary: Get pet by ID
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: pet_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Pet
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - properties:
+                      data:
+                        $ref: '#/components/schemas/Pet'
+    put:
+      summary: Update pet
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: pet_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PetRequest'
+      responses:
+        "200":
+          description: Updated pet
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - properties:
+                      data:
+                        $ref: '#/components/schemas/Pet'
+    delete:
+      summary: Soft delete pet
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: pet_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - properties:
+                      data:
+                        $ref: '#/components/schemas/SimpleDeletedResponse'
+  /api/v1/pets/{pet_id}/lookups:
+    get:
+      summary: Lookup history for a pet chip
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: pet_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Lookup history
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/LookupHistoryEntry'
+  /api/v1/pets/{pet_id}/transfer:
+    post:
+      summary: Initiate transfer
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: pet_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TransferRequest'
+      responses:
+        "201":
+          description: Transfer created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - properties:
+                      data:
+                        $ref: '#/components/schemas/TransferResponse'
+  /api/v1/transfers/{token}/confirm:
+    post:
+      summary: Confirm transfer
+      parameters:
+        - name: token
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Transfer approved
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - properties:
+                      data:
+                        $ref: '#/components/schemas/TransferResponse'
+  /api/v1/transfers/{token}/reject:
+    post:
+      summary: Reject transfer
+      parameters:
+        - name: token
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Transfer rejected
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - properties:
+                      data:
+                        $ref: '#/components/schemas/TransferResponse'
+  /api/v1/export:
+    get:
+      summary: Owner data export
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Export data
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - properties:
+                      data:
+                        $ref: '#/components/schemas/ExportResponse'
+  /api/v1/account:
+    delete:
+      summary: Anonymize owner account
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Account anonymized
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - properties:
+                      data:
+                        $ref: '#/components/schemas/SimpleAnonymizedResponse'
+  /api/v1/shelter/found:
+    post:
+      summary: Shelter or vet found-pet lookup
+      security:
+        - apiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ShelterFoundRequest'
+      responses:
+        "200":
+          description: Shelter lookup result
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - properties:
+                      data:
+                        $ref: '#/components/schemas/ShelterLookupResponse'
+  /api/v1/disputes:
+    post:
+      summary: Create dispute
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DisputeRequest'
+      responses:
+        "201":
+          description: Dispute created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - properties:
+                      data:
+                        $ref: '#/components/schemas/SimpleCreatedResponse'
+  /api/v1/aaha/lookup/{chip_id}:
+    get:
+      summary: AAHA-style lookup payload
+      parameters:
+        - name: chip_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: AAHA lookup result
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - properties:
+                      data:
+                        $ref: '#/components/schemas/AAHALookupResponse'
+  /api/v1/admin/disputes:
+    get:
+      summary: List disputes
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Dispute list
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/Dispute'
+  /api/v1/admin/disputes/{id}:
+    get:
+      summary: Get dispute
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Dispute detail
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - properties:
+                      data:
+                        $ref: '#/components/schemas/Dispute'
+    put:
+      summary: Update dispute
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DisputeUpdateRequest'
+      responses:
+        "200":
+          description: Dispute updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - properties:
+                      data:
+                        type: object
+                        properties:
+                          updated:
+                            type: boolean
+  /api/v1/admin/stats:
+    get:
+      summary: Registry stats
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Admin stats
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - properties:
+                      data:
+                        $ref: '#/components/schemas/AdminStats'
+
+# Route diff against chi registration in api/internal/app/server.go
+# Missing from spec: none
