@@ -173,15 +173,15 @@ func TestPublicLookupUnregisteredChipReturnsManufacturerHintOnly(t *testing.T) {
 	}
 }
 
-func TestShelterLookupReturnsFullContactInfoWithValidAPIKey(t *testing.T) {
+func TestShelterLookupUsesMediatedContactWithValidAPIKey(t *testing.T) {
 	server, pool, mailer := newTestAPI(t)
 	registerOwnerAndPet(t, server, pool, mailer, "shelter@example.com", "Jamie Shelter", "982000000000321", "Pepper")
 
 	resp := postJSON[map[string]any](t, server, "/api/v1/shelter/found", "", map[string]string{
-		"chip_id":       "982000000000321",
-		"organization":  "Downtown Shelter",
-		"location":      "Boston",
-		"notes":         "Found near park",
+		"chip_id":      "982000000000321",
+		"organization": "Downtown Shelter",
+		"location":     "Boston",
+		"notes":        "Found near park",
 	}, http.StatusOK, map[string]string{"X-API-Key": "valid-key"})
 
 	if resp["found"] != true {
@@ -189,8 +189,14 @@ func TestShelterLookupReturnsFullContactInfoWithValidAPIKey(t *testing.T) {
 	}
 	registrations := resp["registrations"].([]any)
 	first := registrations[0].(map[string]any)
-	if first["owner_email"] != "shelter@example.com" {
-		t.Fatalf("unexpected owner email: %#v", first["owner_email"])
+	if _, ok := first["owner_email"]; ok {
+		t.Fatalf("shelter lookup should not expose owner email")
+	}
+	if _, ok := first["owner_phone"]; ok {
+		t.Fatalf("shelter lookup should not expose owner phone")
+	}
+	if first["contact_owner_via"] != "mediated_notification" {
+		t.Fatalf("unexpected contact mode: %#v", first["contact_owner_via"])
 	}
 }
 

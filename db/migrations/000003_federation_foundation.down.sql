@@ -1,0 +1,9 @@
+DROP TABLE IF EXISTS export_batches;
+DROP TABLE IF EXISTS public_snapshots;
+DROP TABLE IF EXISTS actor_keys;
+DROP TABLE IF EXISTS ownership_events;
+DROP TABLE IF EXISTS registration_claims;
+DROP TABLE IF EXISTS pet_profiles;
+DROP TABLE IF EXISTS owner_contacts;
+DROP TABLE IF EXISTS nodes;
+DROP TABLE IF EXISTS organizations;

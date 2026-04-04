@@ -221,7 +221,7 @@ components:
           type: string
     ShelterLookupRegistration:
       type: object
-      required: [pet_name, species, owner_name, manufacturer_hint]
+      required: [pet_name, species, owner_name, manufacturer_hint, contact_owner_via, contact_visibility]
       properties:
         pet_name:
           type: string
@@ -235,15 +235,14 @@ components:
           nullable: true
         owner_name:
           type: string
-        owner_phone:
-          type: string
-          nullable: true
-        owner_email:
-          type: string
-          format: email
-          nullable: true
         manufacturer_hint:
           type: string
+        contact_owner_via:
+          type: string
+          example: mediated_notification
+        contact_visibility:
+          type: string
+          example: protected
     ShelterLookupResponse:
       type: object
       required: [found, manufacturer_hint, registrations]
@@ -390,12 +389,52 @@ components:
                 type: string
               manufacturer_hint:
                 type: string
-              contact_email:
+              contact_via:
+                type: string
+              contact_visibility:
+                type: string
+              support_contact:
                 type: string
                 format: email
-              contact_phone:
-                type: string
-                nullable: true
+    NodeMetadata:
+      type: object
+      properties:
+        id:
+          type: string
+        slug:
+          type: string
+        display_name:
+          type: string
+        public_base_url:
+          type: string
+        status:
+          type: string
+        federation_mode:
+          type: string
+        protocol_version:
+          type: string
+    FederationSnapshot:
+      type: object
+      properties:
+        format:
+          type: string
+        node:
+          $ref: '#/components/schemas/NodeMetadata'
+        public_registrations:
+          type: array
+          items:
+            type: object
+    FederationEventStream:
+      type: object
+      properties:
+        format:
+          type: string
+        node:
+          $ref: '#/components/schemas/NodeMetadata'
+        events:
+          type: array
+          items:
+            type: object
     Dispute:
       type: object
       properties:
@@ -466,6 +505,20 @@ paths:
                         $ref: '#/components/schemas/Health'
         "503":
           description: Database unavailable
+  /.well-known/openchip-node:
+    get:
+      summary: Reference node metadata
+      responses:
+        "200":
+          description: Node metadata
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - properties:
+                      data:
+                        $ref: '#/components/schemas/NodeMetadata'
   /api/v1/lookup/{chip_id}:
     get:
       summary: Public chip lookup
@@ -898,6 +951,41 @@ paths:
                   - properties:
                       data:
                         $ref: '#/components/schemas/AAHALookupResponse'
+  /api/v1/federation/snapshot:
+    get:
+      summary: Export a public registry snapshot
+      responses:
+        "200":
+          description: Public snapshot
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - properties:
+                      data:
+                        $ref: '#/components/schemas/FederationSnapshot'
+  /api/v1/federation/events:
+    get:
+      summary: Export an append-only event stream
+      parameters:
+        - name: since
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+      responses:
+        "200":
+          description: Event stream
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - properties:
+                      data:
+                        $ref: '#/components/schemas/FederationEventStream'
   /api/v1/admin/disputes:
     get:
       summary: List disputes

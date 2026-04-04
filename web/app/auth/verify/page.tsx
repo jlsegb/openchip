@@ -1,13 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 
 import { SiteShell } from "@/components/site-shell";
 import { apiFetch } from "@/lib/api";
 import { setToken } from "@/lib/session";
 
-export default function VerifyPage() {
+function VerifyContent() {
   const params = useSearchParams();
   const [status, setStatus] = useState("Verifying your magic link...");
 
@@ -29,11 +29,26 @@ export default function VerifyPage() {
   }, [params]);
 
   return (
+    <section className="py-20">
+      <h1 className="font-display text-5xl text-pine">Verify sign-in</h1>
+      <p className="mt-6 text-lg text-dusk/75">{status}</p>
+    </section>
+  );
+}
+
+export default function VerifyPage() {
+  return (
     <SiteShell compact>
-      <section className="py-20">
-        <h1 className="font-display text-5xl text-pine">Verify sign-in</h1>
-        <p className="mt-6 text-lg text-dusk/75">{status}</p>
-      </section>
+      <Suspense
+        fallback={
+          <section className="py-20">
+            <h1 className="font-display text-5xl text-pine">Verify sign-in</h1>
+            <p className="mt-6 text-lg text-dusk/75">Verifying your magic link...</p>
+          </section>
+        }
+      >
+        <VerifyContent />
+      </Suspense>
     </SiteShell>
   );
 }

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -15,6 +16,10 @@ import (
 
 	"github.com/openchip/openchip/api/internal/chip"
 	"github.com/openchip/openchip/api/internal/model"
+)
+
+const (
+	localReferenceNodeID = "22222222-2222-2222-2222-222222222222"
 )
 
 type Store struct {
@@ -50,6 +55,8 @@ func (s *Store) Health(ctx context.Context) error {
 func (s *Store) FindOrCreateOwner(ctx context.Context, email, name string) (model.Owner, error) {
 	c, cancel := s.ctx(ctx)
 	defer cancel()
+
+	email = strings.TrimSpace(strings.ToLower(email))
 	var owner model.Owner
 	query := `
 		INSERT INTO owners (id, email, name, created_at, updated_at)
@@ -62,7 +69,13 @@ func (s *Store) FindOrCreateOwner(ctx context.Context, email, name string) (mode
 	err := s.db.QueryRow(c, query, uuid.New(), email, name).Scan(
 		&owner.ID, &owner.Email, &owner.Name, &owner.Phone, &owner.CreatedAt, &owner.UpdatedAt,
 	)
-	return owner, err
+	if err != nil {
+		return owner, err
+	}
+	if err := s.syncOwnerContact(c, owner.ID, owner.Email, owner.Phone, owner.CreatedAt, owner.UpdatedAt); err != nil {
+		return owner, err
+	}
+	return owner, nil
 }
 
 func (s *Store) GetOwnerByID(ctx context.Context, ownerID string) (model.Owner, error) {
@@ -70,8 +83,10 @@ func (s *Store) GetOwnerByID(ctx context.Context, ownerID string) (model.Owner, 
 	defer cancel()
 	var owner model.Owner
 	err := s.db.QueryRow(c, `
-		SELECT id::text, email, name, phone, created_at, updated_at
-		FROM owners WHERE id = $1
+		SELECT o.id::text, COALESCE(oc.email, o.email), o.name, COALESCE(oc.phone, o.phone), o.created_at, o.updated_at
+		FROM owners o
+		LEFT JOIN owner_contacts oc ON oc.owner_id = o.id
+		WHERE o.id = $1
 	`, ownerID).Scan(&owner.ID, &owner.Email, &owner.Name, &owner.Phone, &owner.CreatedAt, &owner.UpdatedAt)
 	return owner, err
 }
@@ -88,7 +103,16 @@ func (s *Store) UpdateOwnerProfile(ctx context.Context, ownerID, name string, ph
 		WHERE id = $1
 		RETURNING id::text, email, name, phone, created_at, updated_at
 	`, ownerID, name, phone).Scan(&owner.ID, &owner.Email, &owner.Name, &owner.Phone, &owner.CreatedAt, &owner.UpdatedAt)
-	return owner, err
+	if err != nil {
+		return owner, err
+	}
+	if err := s.syncOwnerContact(c, owner.ID, owner.Email, owner.Phone, owner.CreatedAt, owner.UpdatedAt); err != nil {
+		return owner, err
+	}
+	return owner, s.appendEvent(c, "owner", owner.ID, "owner_profile_updated", map[string]interface{}{
+		"name":  owner.Name,
+		"phone": owner.Phone,
+	}, "owner", ownerID, nil)
 }
 
 func (s *Store) CreateMagicLink(ctx context.Context, ownerID, token string, expiresAt time.Time) error {
@@ -182,7 +206,26 @@ func (s *Store) CreatePet(ctx context.Context, ownerID string, input PetInput) (
 		&pet.PetName, &pet.Species, &pet.Breed, &pet.Color, &pet.DateOfBirth, &pet.Notes, &pet.PhotoURL,
 		&pet.Active, &pet.RegisteredAt, &pet.UpdatedAt,
 	)
-	return pet, err
+	if err != nil {
+		return pet, err
+	}
+	if err := s.syncPetProjection(c, pet); err != nil {
+		return pet, err
+	}
+	if err := s.appendEvent(c, "chip", pet.ChipPK, "registration_claim_created", map[string]interface{}{
+		"owner_id":              pet.OwnerID,
+		"pet_profile_id":        pet.ID,
+		"chip_id_normalized":    pet.ChipNormalized,
+		"manufacturer_hint":     pet.Manufacturer,
+		"public_contact_policy": "mediated",
+		"pet_name":              pet.PetName,
+		"species":               pet.Species,
+		"breed":                 pet.Breed,
+		"color":                 pet.Color,
+	}, "owner", ownerID, nil); err != nil {
+		return pet, err
+	}
+	return pet, nil
 }
 
 func (s *Store) ListPets(ctx context.Context, ownerID string, activeOnly bool) ([]model.Pet, error) {
@@ -262,14 +305,52 @@ func (s *Store) UpdatePet(ctx context.Context, ownerID, petID string, input PetI
 		&pet.PetName, &pet.Species, &pet.Breed, &pet.Color, &pet.DateOfBirth, &pet.Notes, &pet.PhotoURL,
 		&pet.Active, &pet.RegisteredAt, &pet.UpdatedAt,
 	)
-	return pet, err
+	if err != nil {
+		return pet, err
+	}
+	if err := s.syncPetProjection(c, pet); err != nil {
+		return pet, err
+	}
+	if err := s.appendEvent(c, "pet_profile", pet.ID, "pet_profile_updated", map[string]interface{}{
+		"pet_name":   pet.PetName,
+		"species":    pet.Species,
+		"breed":      pet.Breed,
+		"color":      pet.Color,
+		"notes":      pet.Notes,
+		"photo_url":  pet.PhotoURL,
+		"owner_id":   pet.OwnerID,
+		"chip_id":    pet.ChipPK,
+		"chip_value": pet.ChipNormalized,
+	}, "owner", ownerID, nil); err != nil {
+		return pet, err
+	}
+	return pet, nil
 }
 
 func (s *Store) SoftDeletePet(ctx context.Context, ownerID, petID string) error {
 	c, cancel := s.ctx(ctx)
 	defer cancel()
-	_, err := s.db.Exec(c, `UPDATE pets SET active = false, updated_at = now() WHERE id = $1 AND owner_id = $2`, petID, ownerID)
-	return err
+	var chipID string
+	err := s.db.QueryRow(c, `
+		UPDATE pets
+		SET active = false, updated_at = now()
+		WHERE id = $1 AND owner_id = $2
+		RETURNING chip_id::text
+	`, petID, ownerID).Scan(&chipID)
+	if err != nil {
+		return err
+	}
+	if _, err := s.db.Exec(c, `
+		UPDATE registration_claims
+		SET status = 'inactive', updated_at = now()
+		WHERE pet_profile_id = $1 AND claimant_owner_id = $2 AND status = 'active'
+	`, petID, ownerID); err != nil {
+		return err
+	}
+	return s.appendEvent(c, "pet_profile", petID, "registration_claim_deactivated", map[string]interface{}{
+		"owner_id": ownerID,
+		"chip_id":  chipID,
+	}, "owner", ownerID, nil)
 }
 
 func (s *Store) LookupRegistrations(ctx context.Context, rawChip string) ([]model.LookupRegistration, chip.Normalized, error) {
@@ -280,10 +361,11 @@ func (s *Store) LookupRegistrations(ctx context.Context, rawChip string) ([]mode
 	c, cancel := s.ctx(ctx)
 	defer cancel()
 	rows, err := s.db.Query(c, `
-		SELECT o.id::text, p.pet_name, p.species, p.breed, p.color, o.name, split_part(o.name, ' ', 1), o.phone, o.email, c.manufacturer_hint
+		SELECT o.id::text, p.pet_name, p.species, p.breed, p.color, o.name, split_part(o.name, ' ', 1), oc.phone, oc.email, c.manufacturer_hint
 		FROM chips c
 		JOIN pets p ON p.chip_id = c.id
 		JOIN owners o ON o.id = p.owner_id
+		LEFT JOIN owner_contacts oc ON oc.owner_id = o.id
 		WHERE p.active = true
 			AND (c.chip_id_normalized = $1 OR c.chip_id_raw = $2)
 		ORDER BY p.registered_at DESC
@@ -307,12 +389,22 @@ func (s *Store) LookupRegistrations(ctx context.Context, rawChip string) ([]mode
 func (s *Store) LogLookup(ctx context.Context, rawInput string, norm chip.Normalized, found bool, ip, agent string) error {
 	c, cancel := s.ctx(ctx)
 	defer cancel()
+	id := uuid.NewString()
 	_, err := s.db.Exec(c, `
 		INSERT INTO lookups (
 			id, chip_id_queried, chip_id_normalized, found, looked_up_by_ip, looked_up_by_agent, created_at
 		) VALUES ($1, $2, $3, $4, $5, $6, now())
-	`, uuid.New(), rawInput, norm.Normalized, found, ip, agent)
-	return err
+	`, id, rawInput, norm.Normalized, found, ip, agent)
+	if err != nil {
+		return err
+	}
+	return s.appendEvent(c, "chip_lookup", id, "lookup_recorded", map[string]interface{}{
+		"chip_id_queried":    rawInput,
+		"chip_id_normalized": norm.Normalized,
+		"found":              found,
+		"looked_up_by_ip":    ip,
+		"looked_up_by_agent": agent,
+	}, "public", ip, nil)
 }
 
 func (s *Store) MarkLookupNotified(ctx context.Context, chipNormalized string) error {
@@ -333,11 +425,25 @@ func (s *Store) CreateTransfer(ctx context.Context, chipPK, fromOwnerID, toEmail
 	token := strings.ReplaceAll(uuid.NewString(), "-", "")
 	c, cancel := s.ctx(ctx)
 	defer cancel()
+	transferID := uuid.NewString()
 	_, err = s.db.Exec(c, `
 		INSERT INTO transfers (
 			id, chip_id, from_owner_id, to_owner_id, initiated_by, initiator_note, status, token, expires_at, created_at
 		) VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7, $8, now())
-	`, uuid.New(), chipPK, nullable(fromOwnerID), toOwner.ID, initiatedBy, note, token, expiresAt)
+	`, transferID, chipPK, nullable(fromOwnerID), toOwner.ID, initiatedBy, note, token, expiresAt)
+	if err != nil {
+		return token, toOwner.ID, err
+	}
+	err = s.appendEvent(c, "chip", chipPK, "ownership_transfer_initiated", map[string]interface{}{
+		"transfer_id":    transferID,
+		"from_owner_id":  fromOwnerID,
+		"to_owner_id":    toOwner.ID,
+		"initiated_by":   initiatedBy,
+		"initiator_note": note,
+		"expires_at":     expiresAt,
+		"target_contact": toEmail,
+		"source_node_id": localReferenceNodeID,
+	}, "owner", fromOwnerID, nil)
 	return token, toOwner.ID, err
 }
 
@@ -356,8 +462,20 @@ func hashToken(token string) string {
 func (s *Store) ResolveTransfer(ctx context.Context, token, status string) error {
 	c, cancel := s.ctx(ctx)
 	defer cancel()
-	_, err := s.db.Exec(c, `UPDATE transfers SET status = $2, resolved_at = now() WHERE token = $1 AND status = 'pending'`, token, status)
-	return err
+	var transferID, chipID string
+	err := s.db.QueryRow(c, `
+		UPDATE transfers
+		SET status = $2, resolved_at = now()
+		WHERE token = $1 AND status = 'pending'
+		RETURNING id::text, chip_id::text
+	`, token, status).Scan(&transferID, &chipID)
+	if err != nil {
+		return err
+	}
+	return s.appendEvent(c, "chip", chipID, "ownership_transfer_"+status, map[string]interface{}{
+		"transfer_id": transferID,
+		"token":       token,
+	}, "system", localReferenceNodeID, nil)
 }
 
 func (s *Store) ApproveTransfer(ctx context.Context, token string) error {
@@ -401,7 +519,30 @@ func (s *Store) ApproveTransfer(ctx context.Context, token string) error {
 	if _, err := tx.Exec(c, `UPDATE transfers SET status = 'approved', resolved_at = now() WHERE id = $1`, transferID); err != nil {
 		return err
 	}
-
+	if _, err := tx.Exec(c, `
+		UPDATE registration_claims
+		SET status = 'transferred', updated_at = now()
+		WHERE chip_id = $1 AND claimant_owner_id = $2 AND status = 'active'
+	`, chipPK, nullable(fromOwnerID)); err != nil && fromOwnerID != "" {
+		return err
+	}
+	if _, err := tx.Exec(c, `
+		INSERT INTO registration_claims (id, chip_id, pet_profile_id, claimant_owner_id, source_node_id, status, claim_scope, created_at, updated_at)
+		SELECT $1, p.chip_id, p.id, p.owner_id, $2, 'active', 'ownership', now(), now()
+		FROM pets p
+		WHERE p.chip_id = $3 AND p.owner_id = $4
+		ORDER BY p.registered_at DESC
+		LIMIT 1
+	`, uuid.New(), localReferenceNodeID, chipPK, toOwnerID); err != nil {
+		return err
+	}
+	if err := s.appendEvent(c, "chip", chipPK, "ownership_transferred", map[string]interface{}{
+		"transfer_id":   transferID,
+		"from_owner_id": fromOwnerID,
+		"to_owner_id":   toOwnerID,
+	}, "system", localReferenceNodeID, tx); err != nil {
+		return err
+	}
 	return tx.Commit(c)
 }
 
@@ -455,7 +596,31 @@ func (s *Store) ExportOwnerData(ctx context.Context, ownerID string) (map[string
 		})
 	}
 
-	return map[string]interface{}{"profile": owner, "pets": pets, "lookups": lookups}, rows.Err()
+	private := map[string]interface{}{
+		"owner_contact": map[string]interface{}{
+			"email": owner.Email,
+			"phone": owner.Phone,
+		},
+	}
+	public := map[string]interface{}{
+		"owner_profile": map[string]interface{}{
+			"id":         owner.ID,
+			"name":       owner.Name,
+			"created_at": owner.CreatedAt,
+			"updated_at": owner.UpdatedAt,
+		},
+		"pets":    pets,
+		"lookups": lookups,
+	}
+	payload := map[string]interface{}{
+		"profile": owner,
+		"pets":    pets,
+		"lookups": lookups,
+		"public":  public,
+		"private": private,
+	}
+	_ = s.recordExportBatch(c, "owner_export", ownerID, payload)
+	return payload, rows.Err()
 }
 
 func (s *Store) AnonymizeOwner(ctx context.Context, ownerID string) error {
@@ -479,7 +644,22 @@ func (s *Store) AnonymizeOwner(ctx context.Context, ownerID string) error {
 	if _, err := tx.Exec(c, `UPDATE owners SET email = $2, name = 'Deleted Owner', phone = NULL, updated_at = now() WHERE id = $1`, ownerID, replacement); err != nil {
 		return err
 	}
+	if _, err := tx.Exec(c, `
+		INSERT INTO owner_contacts (owner_id, email, phone, created_at, updated_at)
+		VALUES ($1, $2, NULL, now(), now())
+		ON CONFLICT (owner_id) DO UPDATE SET email = EXCLUDED.email, phone = EXCLUDED.phone, updated_at = now()
+	`, ownerID, replacement); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(c, `UPDATE pets SET active = false, updated_at = now() WHERE owner_id = $1`, ownerID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(c, `UPDATE registration_claims SET status = 'inactive', updated_at = now() WHERE claimant_owner_id = $1 AND status = 'active'`, ownerID); err != nil {
+		return err
+	}
+	if err := s.appendEvent(c, "owner", ownerID, "owner_anonymized", map[string]interface{}{
+		"replacement_contact": replacement,
+	}, "owner", ownerID, tx); err != nil {
 		return err
 	}
 	return tx.Commit(c)
@@ -496,11 +676,28 @@ func (s *Store) CreateDispute(ctx context.Context, chipID, reporterName, reporte
 	}
 	c, cancel := s.ctx(ctx)
 	defer cancel()
+	disputeID := uuid.NewString()
 	_, err = s.db.Exec(c, `
 		INSERT INTO disputes (id, chip_id, reporter_email, reporter_name, description, status, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, 'open', now(), now())
-	`, uuid.New(), chipPK, reporterEmail, reporterName, description)
-	return err
+	`, disputeID, chipPK, reporterEmail, reporterName, description)
+	if err != nil {
+		return err
+	}
+	if _, err := s.db.Exec(c, `
+		UPDATE registration_claims SET status = 'disputed', updated_at = now()
+		WHERE chip_id = $1 AND status = 'active'
+	`, chipPK); err != nil {
+		return err
+	}
+	return s.appendEvent(c, "chip", chipPK, "dispute_opened", map[string]interface{}{
+		"dispute_id":      disputeID,
+		"reporter_name":   reporterName,
+		"reporter_email":  reporterEmail,
+		"description":     description,
+		"chip_id_raw":     chipID,
+		"chip_normalized": norm.Normalized,
+	}, "reporter", reporterEmail, nil)
 }
 
 func (s *Store) ListDisputes(ctx context.Context) ([]map[string]interface{}, error) {
@@ -566,11 +763,27 @@ func (s *Store) GetDispute(ctx context.Context, id string) (map[string]interface
 func (s *Store) UpdateDispute(ctx context.Context, id, status, resolutionNote string) error {
 	c, cancel := s.ctx(ctx)
 	defer cancel()
-	_, err := s.db.Exec(c, `
+	var chipID string
+	err := s.db.QueryRow(c, `
 		UPDATE disputes SET status = $2, description = CASE WHEN $3 = '' THEN description ELSE description || E'\n\nResolution: ' || $3 END, updated_at = now()
 		WHERE id = $1
-	`, id, status, resolutionNote)
-	return err
+		RETURNING chip_id::text
+	`, id, status, resolutionNote).Scan(&chipID)
+	if err != nil {
+		return err
+	}
+	if status == "resolved" {
+		if _, err := s.db.Exec(c, `
+			UPDATE registration_claims SET status = 'active', updated_at = now()
+			WHERE chip_id = $1 AND status = 'disputed'
+		`, chipID); err != nil {
+			return err
+		}
+	}
+	return s.appendEvent(c, "chip", chipID, "dispute_"+status, map[string]interface{}{
+		"dispute_id":      id,
+		"resolution_note": resolutionNote,
+	}, "admin", localReferenceNodeID, nil)
 }
 
 func (s *Store) Stats(ctx context.Context) (map[string]interface{}, error) {
@@ -665,4 +878,296 @@ func (s *Store) LookupHistoryForPet(ctx context.Context, ownerID, petID string) 
 		})
 	}
 	return history, rows.Err()
+}
+
+func (s *Store) GetNodeMetadata(ctx context.Context) (map[string]interface{}, error) {
+	c, cancel := s.ctx(ctx)
+	defer cancel()
+	return s.loadNodeMetadata(c)
+}
+
+func (s *Store) ExportPublicSnapshot(ctx context.Context) (map[string]interface{}, error) {
+	c, cancel := s.ctx(ctx)
+	defer cancel()
+
+	node, err := s.loadNodeMetadata(c)
+	if err != nil {
+		return nil, err
+	}
+
+	rows, err := s.db.Query(c, `
+		SELECT
+			c.chip_id_normalized,
+			c.manufacturer_hint,
+			p.id::text,
+			p.pet_name,
+			p.species,
+			p.breed,
+			p.color,
+			split_part(o.name, ' ', 1) AS owner_first_name
+		FROM pets p
+		JOIN chips c ON c.id = p.chip_id
+		JOIN owners o ON o.id = p.owner_id
+		WHERE p.active = true
+		ORDER BY c.chip_id_normalized, p.registered_at DESC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var registrations []map[string]interface{}
+	for rows.Next() {
+		var chipID, manufacturer, petID, petName, species, ownerFirst string
+		var breed, color *string
+		if err := rows.Scan(&chipID, &manufacturer, &petID, &petName, &species, &breed, &color, &ownerFirst); err != nil {
+			return nil, err
+		}
+		registrations = append(registrations, map[string]interface{}{
+			"chip_id_normalized": chipID,
+			"manufacturer_hint":  manufacturer,
+			"pet_profile": map[string]interface{}{
+				"id":       petID,
+				"pet_name": petName,
+				"species":  species,
+				"breed":    breed,
+				"color":    color,
+			},
+			"owner_first_name":   ownerFirst,
+			"contact_visibility": "mediated",
+		})
+	}
+
+	payload := map[string]interface{}{
+		"format":               "openchip.public-snapshot.v1",
+		"node":                 node,
+		"public_registrations": registrations,
+		"generated_at":         time.Now().UTC(),
+	}
+	if err := s.recordPublicSnapshot(c, payload); err != nil {
+		return nil, err
+	}
+	return payload, nil
+}
+
+func (s *Store) ExportEventStream(ctx context.Context, since *time.Time, limit int) (map[string]interface{}, error) {
+	c, cancel := s.ctx(ctx)
+	defer cancel()
+
+	node, err := s.loadNodeMetadata(c)
+	if err != nil {
+		return nil, err
+	}
+	if limit <= 0 || limit > 500 {
+		limit = 250
+	}
+
+	query := `
+		SELECT id::text, aggregate_type, aggregate_id::text, event_type, payload_json, actor_type, actor_id, event_hash, previous_event_hash, signature, created_at
+		FROM ownership_events
+	`
+	var rows pgx.Rows
+	if since != nil {
+		query += ` WHERE created_at >= $1 ORDER BY created_at ASC LIMIT $2`
+		rows, err = s.db.Query(c, query, *since, limit)
+	} else {
+		query += ` ORDER BY created_at ASC LIMIT $1`
+		rows, err = s.db.Query(c, query, limit)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var events []map[string]interface{}
+	for rows.Next() {
+		var id, aggregateType, aggregateID, eventType, actorType, actorID, eventHash string
+		var payload []byte
+		var previousEventHash, signature *string
+		var createdAt time.Time
+		if err := rows.Scan(&id, &aggregateType, &aggregateID, &eventType, &payload, &actorType, &actorID, &eventHash, &previousEventHash, &signature, &createdAt); err != nil {
+			return nil, err
+		}
+		var decoded map[string]interface{}
+		if err := json.Unmarshal(payload, &decoded); err != nil {
+			return nil, err
+		}
+		events = append(events, map[string]interface{}{
+			"id":                  id,
+			"aggregate_type":      aggregateType,
+			"aggregate_id":        aggregateID,
+			"event_type":          eventType,
+			"payload":             decoded,
+			"actor_type":          actorType,
+			"actor_id":            actorID,
+			"event_hash":          eventHash,
+			"previous_event_hash": previousEventHash,
+			"signature":           signature,
+			"created_at":          createdAt,
+		})
+	}
+
+	payload := map[string]interface{}{
+		"format": "openchip.event-stream.v1",
+		"node":   node,
+		"events": events,
+	}
+	scope := "all"
+	if since != nil {
+		scope = "since:" + since.UTC().Format(time.RFC3339)
+	}
+	if err := s.recordExportBatch(c, "event_stream", scope, payload); err != nil {
+		return nil, err
+	}
+	return payload, nil
+}
+
+func (s *Store) syncOwnerContact(ctx context.Context, ownerID, email string, phone *string, createdAt, updatedAt time.Time) error {
+	_, err := s.db.Exec(ctx, `
+		INSERT INTO owner_contacts (owner_id, email, phone, created_at, updated_at)
+		VALUES ($1, lower($2), $3, $4, $5)
+		ON CONFLICT (owner_id) DO UPDATE
+		SET email = EXCLUDED.email, phone = EXCLUDED.phone, updated_at = EXCLUDED.updated_at
+	`, ownerID, email, phone, createdAt, updatedAt)
+	return err
+}
+
+func (s *Store) syncPetProjection(ctx context.Context, pet model.Pet) error {
+	if _, err := s.db.Exec(ctx, `
+		INSERT INTO pet_profiles (id, chip_id, display_name, species, breed, color, date_of_birth, notes, photo_url, public_contact_policy, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'mediated', $10, $11)
+		ON CONFLICT (id) DO UPDATE
+		SET display_name = EXCLUDED.display_name,
+			species = EXCLUDED.species,
+			breed = EXCLUDED.breed,
+			color = EXCLUDED.color,
+			date_of_birth = EXCLUDED.date_of_birth,
+			notes = EXCLUDED.notes,
+			photo_url = EXCLUDED.photo_url,
+			updated_at = EXCLUDED.updated_at
+	`, pet.ID, pet.ChipPK, pet.PetName, pet.Species, pet.Breed, pet.Color, pet.DateOfBirth, pet.Notes, pet.PhotoURL, pet.RegisteredAt, pet.UpdatedAt); err != nil {
+		return err
+	}
+	_, err := s.db.Exec(ctx, `
+		INSERT INTO registration_claims (id, chip_id, pet_profile_id, claimant_owner_id, source_node_id, status, claim_scope, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, 'active', 'ownership', $6, $7)
+		ON CONFLICT DO NOTHING
+	`, uuid.New(), pet.ChipPK, pet.ID, pet.OwnerID, localReferenceNodeID, pet.RegisteredAt, pet.UpdatedAt)
+	return err
+}
+
+func (s *Store) appendEvent(ctx context.Context, aggregateType, aggregateID, eventType string, payload map[string]interface{}, actorType, actorID string, tx pgx.Tx) error {
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	createdAt := time.Now().UTC()
+
+	var previousHash *string
+	query := `
+		SELECT event_hash
+		FROM ownership_events
+		WHERE aggregate_type = $1 AND aggregate_id = $2
+		ORDER BY created_at DESC, id DESC
+		LIMIT 1
+	`
+	if tx != nil {
+		err = tx.QueryRow(ctx, query, aggregateType, aggregateID).Scan(&previousHash)
+	} else {
+		err = s.db.QueryRow(ctx, query, aggregateType, aggregateID).Scan(&previousHash)
+	}
+	if err != nil && err != pgx.ErrNoRows {
+		return err
+	}
+	if err == pgx.ErrNoRows {
+		previousHash = nil
+	}
+
+	hashMaterial := fmt.Sprintf("%s|%s|%s|%s|%s|%s|%s", aggregateType, aggregateID, eventType, string(payloadJSON), actorType, actorID, createdAt.Format(time.RFC3339Nano))
+	if previousHash != nil {
+		hashMaterial += "|" + *previousHash
+	}
+	sum := sha256.Sum256([]byte(hashMaterial))
+	eventHash := hex.EncodeToString(sum[:])
+
+	exec := func() error {
+		_, err := s.db.Exec(ctx, `
+			INSERT INTO ownership_events (
+				id, aggregate_type, aggregate_id, event_type, payload_json, actor_type, actor_id, event_hash, previous_event_hash, signature, created_at
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULL, $10)
+		`, uuid.New(), aggregateType, aggregateID, eventType, payloadJSON, actorType, actorID, eventHash, previousHash, createdAt)
+		return err
+	}
+	if tx != nil {
+		_, err = tx.Exec(ctx, `
+			INSERT INTO ownership_events (
+				id, aggregate_type, aggregate_id, event_type, payload_json, actor_type, actor_id, event_hash, previous_event_hash, signature, created_at
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULL, $10)
+		`, uuid.New(), aggregateType, aggregateID, eventType, payloadJSON, actorType, actorID, eventHash, previousHash, createdAt)
+		return err
+	}
+	return exec()
+}
+
+func (s *Store) loadNodeMetadata(ctx context.Context) (map[string]interface{}, error) {
+	node := map[string]interface{}{}
+	var id, orgSlug, orgName, slug, displayName, baseURL, status, federationMode string
+	err := s.db.QueryRow(ctx, `
+		SELECT n.id::text, o.slug, o.name, n.slug, n.display_name, n.public_base_url, n.status, n.federation_mode
+		FROM nodes n
+		JOIN organizations o ON o.id = n.organization_id
+		ORDER BY n.created_at ASC
+		LIMIT 1
+	`).Scan(&id, &orgSlug, &orgName, &slug, &displayName, &baseURL, &status, &federationMode)
+	if err != nil {
+		return nil, err
+	}
+	node["id"] = id
+	node["slug"] = slug
+	node["display_name"] = displayName
+	node["public_base_url"] = baseURL
+	node["status"] = status
+	node["federation_mode"] = federationMode
+	node["organization"] = map[string]interface{}{
+		"slug": orgSlug,
+		"name": orgName,
+	}
+	node["protocol_version"] = "openchip-node/0.1"
+	return node, nil
+}
+
+func (s *Store) recordPublicSnapshot(ctx context.Context, payload map[string]interface{}) error {
+	node, ok := payload["node"].(map[string]interface{})
+	if !ok {
+		return fmt.Errorf("snapshot missing node metadata")
+	}
+	nodeID, _ := node["id"].(string)
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	sum := sha256.Sum256(payloadJSON)
+	_, err = s.db.Exec(ctx, `
+		INSERT INTO public_snapshots (id, node_id, snapshot_type, payload_json, payload_hash, generated_at)
+		VALUES ($1, $2, 'public_registry', $3, $4, now())
+	`, uuid.New(), nodeID, payloadJSON, hex.EncodeToString(sum[:]))
+	return err
+}
+
+func (s *Store) recordExportBatch(ctx context.Context, exportType, scope string, payload map[string]interface{}) error {
+	node, err := s.loadNodeMetadata(ctx)
+	if err != nil {
+		return err
+	}
+	nodeID, _ := node["id"].(string)
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	sum := sha256.Sum256(payloadJSON)
+	_, err = s.db.Exec(ctx, `
+		INSERT INTO export_batches (id, node_id, export_type, scope, payload_json, payload_hash, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, now())
+	`, uuid.New(), nodeID, exportType, scope, payloadJSON, hex.EncodeToString(sum[:]))
+	return err
 }

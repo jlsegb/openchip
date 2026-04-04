@@ -60,6 +60,7 @@ func New(cfg config.Config, store *store.Store, emailSvc EmailSender, logger *sl
 	r.Use(chimiddleware.Recoverer)
 
 	r.Get("/health", s.health)
+	r.Get("/.well-known/openchip-node", s.nodeMetadata)
 
 	r.Route("/api/v1", func(r chi.Router) {
 		publicIPLimit := func(limit int) func(http.Handler) http.Handler {
@@ -98,6 +99,8 @@ func New(cfg config.Config, store *store.Store, emailSvc EmailSender, logger *sl
 		})
 		r.With(publicIPLimit(5)).Post("/disputes", s.createDispute)
 		r.With(publicIPLimit(cfg.LookupRatePerMin)).Get("/aaha/lookup/{chip_id}", s.aahaLookup)
+		r.Get("/federation/snapshot", s.exportPublicSnapshot)
+		r.Get("/federation/events", s.exportEventStream)
 
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.RequireJWT(cfg.JWTSecret, true))
@@ -117,6 +120,20 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) nodeMetadata(w http.ResponseWriter, r *http.Request) {
+	data, err := s.store.GetNodeMetadata(r.Context())
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "node_metadata_failed", "could not load node metadata")
+		return
+	}
+	data["capabilities"] = []string{"public_snapshot_export", "event_stream_export", "mediated_contact", "single_node_reference"}
+	data["signature_strategy"] = map[string]string{
+		"current": "hash_chain_with_placeholder_signatures",
+		"future":  "operator-published signing keys with event verification",
+	}
+	httpx.WriteJSON(w, http.StatusOK, data)
 }
 
 func (s *Server) lookupManufacturer(w http.ResponseWriter, r *http.Request) {
@@ -228,14 +245,14 @@ func (s *Server) shelterFound(w http.ResponseWriter, r *http.Request) {
 	full := make([]map[string]interface{}, 0, len(results))
 	for _, item := range results {
 		full = append(full, map[string]interface{}{
-			"pet_name":          item.PetName,
-			"species":           item.Species,
-			"breed":             item.Breed,
-			"color":             item.Color,
-			"owner_name":        item.OwnerName,
-			"owner_phone":       item.OwnerPhone,
-			"owner_email":       item.OwnerEmail,
-			"manufacturer_hint": item.Manufacturer,
+			"pet_name":           item.PetName,
+			"species":            item.Species,
+			"breed":              item.Breed,
+			"color":              item.Color,
+			"owner_name":         item.OwnerName,
+			"manufacturer_hint":  item.Manufacturer,
+			"contact_owner_via":  "mediated_notification",
+			"contact_visibility": "protected",
 		})
 	}
 
@@ -590,10 +607,11 @@ func (s *Server) aahaLookup(w http.ResponseWriter, r *http.Request) {
 	registries := []map[string]interface{}{}
 	for _, item := range results {
 		registries = append(registries, map[string]interface{}{
-			"registry":          "OpenChip",
-			"manufacturer_hint": item.Manufacturer,
-			"contact_email":     s.cfg.SupportEmail,
-			"contact_phone":     item.OwnerPhone,
+			"registry":           "OpenChip Reference Node",
+			"manufacturer_hint":  item.Manufacturer,
+			"contact_via":        "mediated_notification",
+			"contact_visibility": "protected",
+			"support_contact":    s.cfg.SupportEmail,
 		})
 	}
 	httpx.WriteJSON(w, http.StatusOK, map[string]interface{}{
@@ -602,6 +620,34 @@ func (s *Server) aahaLookup(w http.ResponseWriter, r *http.Request) {
 		"match_found":        len(results) > 0,
 		"participating_data": registries,
 	})
+}
+
+func (s *Server) exportPublicSnapshot(w http.ResponseWriter, r *http.Request) {
+	snapshot, err := s.store.ExportPublicSnapshot(r.Context())
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "snapshot_failed", "could not export public snapshot")
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, snapshot)
+}
+
+func (s *Server) exportEventStream(w http.ResponseWriter, r *http.Request) {
+	var since *time.Time
+	if rawSince := r.URL.Query().Get("since"); rawSince != "" {
+		parsed, err := time.Parse(time.RFC3339, rawSince)
+		if err != nil {
+			httpx.WriteError(w, http.StatusBadRequest, "invalid_since", "since must be RFC3339")
+			return
+		}
+		since = &parsed
+	}
+
+	events, err := s.store.ExportEventStream(r.Context(), since, 250)
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "event_stream_failed", "could not export event stream")
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, events)
 }
 
 func (s *Server) adminListDisputes(w http.ResponseWriter, r *http.Request) {
