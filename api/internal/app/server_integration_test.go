@@ -285,7 +285,7 @@ func TestTransferExpiryRejectsExpiredToken(t *testing.T) {
 	}, http.StatusCreated, nil)
 	token := resp["token"].(string)
 
-	if _, err := pool.Exec(context.Background(), `UPDATE transfers SET expires_at = now() - interval '1 minute' WHERE token = $1`, token); err != nil {
+	if _, err := pool.Exec(context.Background(), `UPDATE transfers SET expires_at = now() - interval '1 minute' WHERE token = $1`, hashTestToken(token)); err != nil {
 		t.Fatalf("expire transfer: %v", err)
 	}
 

@@ -423,6 +423,7 @@ func (s *Store) CreateTransfer(ctx context.Context, chipPK, fromOwnerID, toEmail
 		return "", "", err
 	}
 	token := strings.ReplaceAll(uuid.NewString(), "-", "")
+	hashedToken := hashToken(token)
 	c, cancel := s.ctx(ctx)
 	defer cancel()
 	transferID := uuid.NewString()
@@ -430,7 +431,7 @@ func (s *Store) CreateTransfer(ctx context.Context, chipPK, fromOwnerID, toEmail
 		INSERT INTO transfers (
 			id, chip_id, from_owner_id, to_owner_id, initiated_by, initiator_note, status, token, expires_at, created_at
 		) VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7, $8, now())
-	`, transferID, chipPK, nullable(fromOwnerID), toOwner.ID, initiatedBy, note, token, expiresAt)
+	`, transferID, chipPK, nullable(fromOwnerID), toOwner.ID, initiatedBy, note, hashedToken, expiresAt)
 	if err != nil {
 		return token, toOwner.ID, err
 	}
@@ -462,13 +463,14 @@ func hashToken(token string) string {
 func (s *Store) ResolveTransfer(ctx context.Context, token, status string) error {
 	c, cancel := s.ctx(ctx)
 	defer cancel()
+	hashedToken := hashToken(token)
 	var transferID, chipID string
 	err := s.db.QueryRow(c, `
 		UPDATE transfers
 		SET status = $2, resolved_at = now()
 		WHERE token = $1 AND status = 'pending'
 		RETURNING id::text, chip_id::text
-	`, token, status).Scan(&transferID, &chipID)
+	`, hashedToken, status).Scan(&transferID, &chipID)
 	if err != nil {
 		return err
 	}
@@ -481,6 +483,7 @@ func (s *Store) ResolveTransfer(ctx context.Context, token, status string) error
 func (s *Store) ApproveTransfer(ctx context.Context, token string) error {
 	c, cancel := s.ctx(ctx)
 	defer cancel()
+	hashedToken := hashToken(token)
 	tx, err := s.db.BeginTx(c, pgx.TxOptions{})
 	if err != nil {
 		return err
@@ -494,7 +497,7 @@ func (s *Store) ApproveTransfer(ctx context.Context, token string) error {
 		SELECT id::text, chip_id::text, COALESCE(from_owner_id::text, ''), to_owner_id::text
 		FROM transfers
 		WHERE token = $1 AND status = 'pending' AND expires_at > now()
-	`, token).Scan(&transferID, &chipPK, &fromOwnerID, &toOwnerID)
+	`, hashedToken).Scan(&transferID, &chipPK, &fromOwnerID, &toOwnerID)
 	if err != nil {
 		return err
 	}
