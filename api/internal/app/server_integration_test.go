@@ -406,6 +406,45 @@ func TestAccountDeletionAnonymizesOwnerAndPreservesChipAndLookupRecords(t *testi
 	}
 }
 
+func TestFederationEventExportSanitizesPrivateData(t *testing.T) {
+	server, pool, mailer := newTestAPI(t)
+	jwt := registerOwnerAndPet(t, server, pool, mailer, "private@example.com", "Pat Private", "985000000000555", "Nova")
+
+	postNoResp(t, http.MethodPut, server, "/api/v1/auth/me", jwt, map[string]any{
+		"name":  "Pat Private",
+		"phone": "555-0100",
+	}, http.StatusOK, nil)
+
+	req, err := http.NewRequest(http.MethodGet, server.URL+"/api/v1/lookup/985000000000555", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("X-Forwarded-For", "203.0.113.10")
+	req.Header.Set("User-Agent", "scanner-test-agent")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do request: %v", err)
+	}
+	closeBody(t, resp)
+
+	petID := fetchPetIDByName(t, pool, "Nova")
+	postJSON[map[string]any](t, server, "/api/v1/pets/"+petID+"/transfer", jwt, map[string]string{
+		"to_email": "newowner@example.com",
+	}, http.StatusCreated, nil)
+
+	events := getJSON[map[string]any](t, server, "/api/v1/federation/events", "", http.StatusOK)
+	encoded, err := json.Marshal(events)
+	if err != nil {
+		t.Fatalf("marshal events: %v", err)
+	}
+
+	for _, forbidden := range []string{"private@example.com", "555-0100", "203.0.113.10", "scanner-test-agent", "newowner@example.com", "\"actor_id\""} {
+		if strings.Contains(string(encoded), forbidden) {
+			t.Fatalf("federation export leaked private data: %s", forbidden)
+		}
+	}
+}
+
 func registerOwnerAndPet(t *testing.T, server *httptest.Server, pool *pgxpool.Pool, mailer *mockEmailSender, emailAddress, ownerName, chipID, petName string) string {
 	t.Helper()
 	postNoResp(t, http.MethodPost, server, "/api/v1/auth/magic-link", "", map[string]string{

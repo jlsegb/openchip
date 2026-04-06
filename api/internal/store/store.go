@@ -992,19 +992,11 @@ func (s *Store) ExportEventStream(ctx context.Context, since *time.Time, limit i
 		if err := json.Unmarshal(payload, &decoded); err != nil {
 			return nil, err
 		}
-		events = append(events, map[string]interface{}{
-			"id":                  id,
-			"aggregate_type":      aggregateType,
-			"aggregate_id":        aggregateID,
-			"event_type":          eventType,
-			"payload":             decoded,
-			"actor_type":          actorType,
-			"actor_id":            actorID,
-			"event_hash":          eventHash,
-			"previous_event_hash": previousEventHash,
-			"signature":           signature,
-			"created_at":          createdAt,
-		})
+		publicEvent, ok := publicFederationEvent(id, aggregateType, aggregateID, eventType, decoded, actorType, actorID, eventHash, previousEventHash, signature, createdAt)
+		if !ok {
+			continue
+		}
+		events = append(events, publicEvent)
 	}
 
 	payload := map[string]interface{}{
@@ -1020,6 +1012,72 @@ func (s *Store) ExportEventStream(ctx context.Context, since *time.Time, limit i
 		return nil, err
 	}
 	return payload, nil
+}
+
+func publicFederationEvent(id, aggregateType, aggregateID, eventType string, payload map[string]interface{}, actorType, actorID, eventHash string, previousEventHash, signature *string, createdAt time.Time) (map[string]interface{}, bool) {
+	publicPayload, ok := sanitizeFederationPayload(eventType, payload)
+	if !ok {
+		return nil, false
+	}
+
+	event := map[string]interface{}{
+		"id":                  id,
+		"aggregate_type":      aggregateType,
+		"aggregate_id":        aggregateID,
+		"event_type":          eventType,
+		"payload":             publicPayload,
+		"actor_type":          publicActorType(actorType, actorID),
+		"event_hash":          eventHash,
+		"previous_event_hash": previousEventHash,
+		"signature":           signature,
+		"created_at":          createdAt,
+	}
+	return event, true
+}
+
+func sanitizeFederationPayload(eventType string, payload map[string]interface{}) (map[string]interface{}, bool) {
+	switch eventType {
+	case "registration_claim_created":
+		return publicFields(payload, "chip_id_normalized", "manufacturer_hint", "public_contact_policy", "pet_name", "species", "breed", "color"), true
+	case "pet_profile_updated":
+		return publicFields(payload, "pet_name", "species", "breed", "color", "notes", "photo_url", "chip_value"), true
+	case "ownership_transfer_initiated":
+		return map[string]interface{}{"status": "pending"}, true
+	case "ownership_transferred":
+		return map[string]interface{}{"status": "approved"}, true
+	case "ownership_transfer_rejected":
+		return map[string]interface{}{"status": "rejected"}, true
+	case "dispute_opened":
+		return publicFields(payload, "dispute_id", "chip_normalized"), true
+	case "dispute_reviewing", "dispute_resolved":
+		return publicFields(payload, "dispute_id"), true
+	default:
+		return nil, false
+	}
+}
+
+func publicFields(payload map[string]interface{}, fields ...string) map[string]interface{} {
+	result := map[string]interface{}{}
+	for _, field := range fields {
+		if value, ok := payload[field]; ok {
+			result[field] = value
+		}
+	}
+	return result
+}
+
+func publicActorType(actorType, actorID string) string {
+	switch actorType {
+	case "system":
+		if actorID == localReferenceNodeID {
+			return "node"
+		}
+		return "system"
+	case "admin":
+		return "operator"
+	default:
+		return actorType
+	}
 }
 
 func (s *Store) syncOwnerContact(ctx context.Context, ownerID, email string, phone *string, createdAt, updatedAt time.Time) error {
