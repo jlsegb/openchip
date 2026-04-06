@@ -4,33 +4,30 @@ import { useEffect, useState } from "react";
 
 import { DashboardShell } from "@/components/dashboard-shell";
 import { apiFetch } from "@/lib/api";
-import { clearToken, getToken } from "@/lib/session";
 
 export function AccountPanel() {
   const [profile, setProfile] = useState<any>(null);
   const [status, setStatus] = useState("");
 
   useEffect(() => {
-    const token = getToken();
-    if (!token) {
-      window.location.href = "/auth";
-      return;
-    }
-    apiFetch("/auth/me", undefined, token).then(setProfile).catch((err) => {
-      setStatus(err instanceof Error ? err.message : "Could not load profile");
+    apiFetch("/auth/me").then(setProfile).catch((err) => {
+      const message = err instanceof Error ? err.message : "Could not load profile";
+      if (message.toLowerCase().includes("unauthorized")) {
+        window.location.href = "/auth";
+        return;
+      }
+      setStatus(message);
     });
   }, []);
 
   async function deleteAccount() {
-    const token = getToken();
-    await apiFetch("/account", { method: "DELETE" }, token);
-    clearToken();
+    await apiFetch("/account", { method: "DELETE" });
+    await apiFetch("/auth/logout", { method: "POST" });
     window.location.href = "/";
   }
 
   async function saveProfile(event: React.FormEvent) {
     event.preventDefault();
-    const token = getToken();
     const updated = await apiFetch(
       "/auth/me",
       {
@@ -39,8 +36,7 @@ export function AccountPanel() {
           name: profile?.name ?? "",
           phone: profile?.phone || null
         })
-      },
-      token
+      }
     );
     setProfile(updated);
     setStatus("Profile updated.");

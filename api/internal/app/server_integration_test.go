@@ -110,7 +110,7 @@ func TestFullRegistrationFlowMagicLinkVerifyCreatePet(t *testing.T) {
 		"name":  "Sam Owner",
 	}, http.StatusOK, nil)
 	token := mailer.waitForToken(t, "owner@example.com", "Click to sign in to OpenChip")
-	verify := getJSON[map[string]string](t, server, "/api/v1/auth/verify?token="+token, "", http.StatusOK)
+	verify := postJSON[map[string]string](t, server, "/api/v1/auth/verify", "", map[string]string{"token": token}, http.StatusOK, nil)
 	jwt := verify["token"]
 	if jwt == "" {
 		t.Fatalf("expected jwt token")
@@ -341,10 +341,11 @@ func TestMagicLinkExpiryRejected(t *testing.T) {
 		t.Fatalf("insert magic link: %v", err)
 	}
 
-	resp := rawGet(t, server, "/api/v1/auth/verify?token=expired-token", "")
+	resp := doJSONRequest(t, http.MethodPost, server, "/api/v1/auth/verify", "", map[string]string{"token": "expired-token"}, http.StatusUnauthorized, nil)
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusUnauthorized)
 	}
+	closeBody(t, resp)
 }
 
 func TestMagicLinkSingleUseRejectedOnSecondAttempt(t *testing.T) {
@@ -355,13 +356,13 @@ func TestMagicLinkSingleUseRejectedOnSecondAttempt(t *testing.T) {
 		"name":  "Single Use",
 	}, http.StatusOK, nil)
 	token := mailer.waitForToken(t, "singleuse@example.com", "Click to sign in to OpenChip")
-	first := rawGet(t, server, "/api/v1/auth/verify?token="+token, "")
+	first := doJSONRequest(t, http.MethodPost, server, "/api/v1/auth/verify", "", map[string]string{"token": token}, http.StatusOK, nil)
 	if first.StatusCode != http.StatusOK {
 		t.Fatalf("first verify status = %d, want 200", first.StatusCode)
 	}
 	closeBody(t, first)
 
-	second := rawGet(t, server, "/api/v1/auth/verify?token="+token, "")
+	second := doJSONRequest(t, http.MethodPost, server, "/api/v1/auth/verify", "", map[string]string{"token": token}, http.StatusUnauthorized, nil)
 	if second.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("second verify status = %d, want 401", second.StatusCode)
 	}
@@ -452,7 +453,9 @@ func registerOwnerAndPet(t *testing.T, server *httptest.Server, pool *pgxpool.Po
 		"name":  ownerName,
 	}, http.StatusOK, nil)
 
-	verifyResp := getJSON[map[string]string](t, server, "/api/v1/auth/verify?token="+mailer.waitForToken(t, emailAddress, "Click to sign in to OpenChip"), "", http.StatusOK)
+	verifyResp := postJSON[map[string]string](t, server, "/api/v1/auth/verify", "", map[string]string{
+		"token": mailer.waitForToken(t, emailAddress, "Click to sign in to OpenChip"),
+	}, http.StatusOK, nil)
 	jwt := verifyResp["token"]
 	postNoResp(t, http.MethodPost, server, "/api/v1/pets", jwt, map[string]any{
 		"chip_id":  chipID,

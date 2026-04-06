@@ -15,6 +15,10 @@ components:
       type: apiKey
       in: header
       name: X-API-Key
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: openchip_session
   schemas:
     Error:
       type: object
@@ -65,6 +69,18 @@ components:
         role:
           type: string
           enum: [owner, admin]
+    VerifyRequest:
+      type: object
+      required: [token]
+      properties:
+        token:
+          type: string
+    LogoutResponse:
+      type: object
+      required: [signed_out]
+      properties:
+        signed_out:
+          type: boolean
     Owner:
       type: object
       required: [id, email, name, created_at, updated_at]
@@ -600,17 +616,17 @@ paths:
                       data:
                         $ref: '#/components/schemas/MagicLinkResponse'
   /api/v1/auth/verify:
-    get:
-      summary: Verify magic link token
-      parameters:
-        - name: token
-          in: query
-          required: true
-          schema:
-            type: string
+    post:
+      summary: Verify magic link token and issue a session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VerifyRequest'
       responses:
         "200":
-          description: JWT issued
+          description: Session issued
           content:
             application/json:
               schema:
@@ -619,6 +635,20 @@ paths:
                   - properties:
                       data:
                         $ref: '#/components/schemas/VerifyResponse'
+  /api/v1/auth/logout:
+    post:
+      summary: Clear the current session
+      responses:
+        "200":
+          description: Session cleared
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - properties:
+                      data:
+                        $ref: '#/components/schemas/LogoutResponse'
   /api/v1/auth/me:
     get:
       summary: Current owner profile

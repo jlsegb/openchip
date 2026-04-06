@@ -4,15 +4,13 @@ import { useState } from "react";
 
 import { DashboardShell } from "@/components/dashboard-shell";
 import { apiFetch } from "@/lib/api";
-import { getToken } from "@/lib/session";
 
 export function ExportPanel() {
   const [status, setStatus] = useState("");
 
   async function exportData() {
     try {
-      const token = getToken();
-      const data = await apiFetch("/export", undefined, token);
+      const data = await apiFetch("/export");
       const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement("a");

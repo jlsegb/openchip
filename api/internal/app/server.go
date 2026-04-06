@@ -56,6 +56,7 @@ func New(cfg config.Config, store *store.Store, emailSvc EmailSender, logger *sl
 	}
 
 	r := chi.NewRouter()
+	r.Use(middleware.AllowOrigin(cfg.BaseURL))
 	r.Use(middleware.RequestLogger(logger))
 	r.Use(chimiddleware.Recoverer)
 
@@ -73,7 +74,8 @@ func New(cfg config.Config, store *store.Store, emailSvc EmailSender, logger *sl
 		r.Get("/lookup/{chip_id}/manufacturer", s.lookupManufacturer)
 		r.With(publicIPLimit(10)).Post("/lookup/{chip_id}/contact", s.contactOwner)
 		r.Post("/auth/magic-link", s.magicLink)
-		r.With(publicIPLimit(10)).Get("/auth/verify", s.verifyMagicLink)
+		r.With(publicIPLimit(10)).Post("/auth/verify", s.verifyMagicLink)
+		r.Post("/auth/logout", s.logout)
 
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.RequireJWT(cfg.JWTSecret, false))
@@ -330,7 +332,14 @@ func (s *Server) magicLink(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) verifyMagicLink(w http.ResponseWriter, r *http.Request) {
-	token := r.URL.Query().Get("token")
+	var body struct {
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid_json", "could not parse request body")
+		return
+	}
+	token := strings.TrimSpace(body.Token)
 	if token == "" {
 		httpx.WriteError(w, http.StatusBadRequest, "invalid_token", "token is required")
 		return
@@ -353,7 +362,13 @@ func (s *Server) verifyMagicLink(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusInternalServerError, "jwt_error", "could not create session token")
 		return
 	}
+	s.setSessionCookie(w, jwtToken)
 	httpx.WriteJSON(w, http.StatusOK, map[string]string{"token": jwtToken, "role": role})
+}
+
+func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
+	s.clearSessionCookie(w)
+	httpx.WriteJSON(w, http.StatusOK, map[string]bool{"signed_out": true})
 }
 
 func (s *Server) me(w http.ResponseWriter, r *http.Request) {
@@ -781,6 +796,30 @@ func validatePetInput(input store.PetInput, requireChip bool) error {
 
 func stringPtr(value string) *string {
 	return &value
+}
+
+func (s *Server) setSessionCookie(w http.ResponseWriter, token string) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     middleware.SessionCookieName,
+		Value:    token,
+		Path:     "/",
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   strings.HasPrefix(strings.ToLower(s.cfg.BaseURL), "https://"),
+		MaxAge:   int(s.cfg.JWTExpiry.Seconds()),
+	})
+}
+
+func (s *Server) clearSessionCookie(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     middleware.SessionCookieName,
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   strings.HasPrefix(strings.ToLower(s.cfg.BaseURL), "https://"),
+		MaxAge:   -1,
+	})
 }
 
 func (s *Server) sendEmailAsync(ctx context.Context, msg email.Message, ownerID, chipID string) {

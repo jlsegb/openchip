@@ -4,7 +4,6 @@ import { useEffect, useState } from "react";
 
 import { DashboardShell } from "@/components/dashboard-shell";
 import { apiFetch } from "@/lib/api";
-import { getToken } from "@/lib/session";
 
 type Mode = "create" | "edit";
 
@@ -22,13 +21,8 @@ export function PetForm({ mode, petId }: { mode: Mode; petId?: string }) {
   const [lookupHistory, setLookupHistory] = useState<Array<{ id: string; looked_up_by_agent?: string; created_at: string }>>([]);
 
   useEffect(() => {
-    const token = getToken();
-    if (!token) {
-      window.location.href = "/auth";
-      return;
-    }
     if (mode === "edit" && petId) {
-      apiFetch<any>(`/pets/${petId}`, undefined, token).then((pet) => {
+      apiFetch<any>(`/pets/${petId}`).then((pet) => {
         setForm({
           chip_id: pet.chip_id_raw,
           pet_name: pet.pet_name,
@@ -38,14 +32,27 @@ export function PetForm({ mode, petId }: { mode: Mode; petId?: string }) {
           date_of_birth: pet.date_of_birth?.slice(0, 10) ?? "",
           notes: pet.notes ?? ""
         });
+      }).catch((err) => {
+        const message = err instanceof Error ? err.message : "Could not load pet";
+        if (message.toLowerCase().includes("unauthorized")) {
+          window.location.href = "/auth";
+        } else {
+          setStatus(message);
+        }
       });
-      apiFetch<any[]>(`/pets/${petId}/lookups`, undefined, token).then(setLookupHistory).catch(() => undefined);
+      apiFetch<any[]>(`/pets/${petId}/lookups`).then(setLookupHistory).catch(() => undefined);
+    } else {
+      apiFetch<any[]>("/pets").catch((err) => {
+        const message = err instanceof Error ? err.message : "Unauthorized";
+        if (message.toLowerCase().includes("unauthorized")) {
+          window.location.href = "/auth";
+        }
+      });
     }
   }, [mode, petId]);
 
   async function onSubmit(event: React.FormEvent) {
     event.preventDefault();
-    const token = getToken();
     try {
       const method = mode === "create" ? "POST" : "PUT";
       const path = mode === "create" ? "/pets" : `/pets/${petId}`;
@@ -58,7 +65,7 @@ export function PetForm({ mode, petId }: { mode: Mode; petId?: string }) {
           date_of_birth: form.date_of_birth || null,
           notes: form.notes || null
         })
-      }, token);
+      });
       setStatus(mode === "create" ? "Pet registered." : "Pet updated.");
       if (mode === "create") {
         window.location.href = "/dashboard";
@@ -69,20 +76,18 @@ export function PetForm({ mode, petId }: { mode: Mode; petId?: string }) {
   }
 
   async function deletePet() {
-    const token = getToken();
-    if (!token || !petId) return;
-    await apiFetch(`/pets/${petId}`, { method: "DELETE" }, token);
+    if (!petId) return;
+    await apiFetch(`/pets/${petId}`, { method: "DELETE" });
     window.location.href = "/dashboard";
   }
 
   async function transferPet() {
-    const token = getToken();
     const email = window.prompt("New owner email");
-    if (!token || !petId || !email) return;
+    if (!petId || !email) return;
     await apiFetch(`/pets/${petId}/transfer`, {
       method: "POST",
       body: JSON.stringify({ to_email: email })
-    }, token);
+    });
     setStatus("Transfer initiated.");
   }
 

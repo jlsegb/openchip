@@ -5,7 +5,6 @@ import { useEffect, useState } from "react";
 
 import { DashboardShell } from "@/components/dashboard-shell";
 import { apiFetch } from "@/lib/api";
-import { getToken } from "@/lib/session";
 
 type Pet = {
   id: string;
@@ -20,13 +19,13 @@ export function DashboardHome() {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    const token = getToken();
-    if (!token) {
-      window.location.href = "/auth";
-      return;
-    }
-    apiFetch<Pet[]>("/pets", undefined, token).then(setPets).catch((err) => {
-      setError(err instanceof Error ? err.message : "Unable to load pets");
+    apiFetch<Pet[]>("/pets").then(setPets).catch((err) => {
+      const message = err instanceof Error ? err.message : "Unable to load pets";
+      if (message.toLowerCase().includes("unauthorized")) {
+        window.location.href = "/auth";
+        return;
+      }
+      setError(message);
     });
   }, []);
 

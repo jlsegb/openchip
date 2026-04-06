@@ -12,17 +12,18 @@ import (
 type contextKey string
 
 const ClaimsKey contextKey = "claims"
+const SessionCookieName = "openchip_session"
 
 func RequireJWT(secret string, requireAdmin bool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			header := r.Header.Get("Authorization")
-			if !strings.HasPrefix(header, "Bearer ") {
-				httpx.WriteError(w, http.StatusUnauthorized, "unauthorized", "missing bearer token")
+			token := bearerTokenFromRequest(r)
+			if token == "" {
+				httpx.WriteError(w, http.StatusUnauthorized, "unauthorized", "missing session token")
 				return
 			}
 
-			claims, err := auth.Parse(secret, strings.TrimPrefix(header, "Bearer "))
+			claims, err := auth.Parse(secret, token)
 			if err != nil {
 				httpx.WriteError(w, http.StatusUnauthorized, "unauthorized", "invalid token")
 				return
@@ -36,6 +37,19 @@ func RequireJWT(secret string, requireAdmin bool) func(http.Handler) http.Handle
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
+}
+
+func bearerTokenFromRequest(r *http.Request) string {
+	header := r.Header.Get("Authorization")
+	if strings.HasPrefix(header, "Bearer ") {
+		return strings.TrimPrefix(header, "Bearer ")
+	}
+
+	cookie, err := r.Cookie(SessionCookieName)
+	if err != nil {
+		return ""
+	}
+	return cookie.Value
 }
 
 func RequireAPIKey(keys map[string]string) func(http.Handler) http.Handler {

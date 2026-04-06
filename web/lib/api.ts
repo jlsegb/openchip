@@ -10,13 +10,18 @@ export async function apiFetch<T>(
   init?: RequestInit,
   token?: string
 ): Promise<T> {
+  const headers = new Headers(init?.headers ?? {});
+  if (init?.body && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
+  if (token) {
+    headers.set("Authorization", `Bearer ${token}`);
+  }
+
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...(init?.headers ?? {})
-    },
+    headers,
+    credentials: "include",
     cache: "no-store"
   });
 

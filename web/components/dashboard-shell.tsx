@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { ReactNode } from "react";
 
-import { clearToken } from "@/lib/session";
+import { apiFetch } from "@/lib/api";
 
 export function DashboardShell({ children }: { children: ReactNode }) {
   return (
@@ -16,8 +16,8 @@ export function DashboardShell({ children }: { children: ReactNode }) {
           <Link href="/dashboard/export">Export</Link>
           <Link href="/dashboard/account">Account</Link>
           <button
-            onClick={() => {
-              clearToken();
+            onClick={async () => {
+              await apiFetch("/auth/logout", { method: "POST" });
               window.location.href = "/auth";
             }}
             className="rounded-full border border-white/20 px-3 py-2"
