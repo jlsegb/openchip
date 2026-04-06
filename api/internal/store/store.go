@@ -592,8 +592,8 @@ func (s *Store) ExportOwnerData(ctx context.Context, ownerID string) (map[string
 			"chip_id_queried":    queried,
 			"chip_id_normalized": normalized,
 			"found":              found,
-			"looked_up_by_ip":    byIP,
-			"looked_up_by_agent": byAgent,
+			"looked_up_by_ip":    nil,
+			"looked_up_by_agent": nil,
 			"notified_owner_at":  notifiedAt,
 			"created_at":         createdAt,
 		})
