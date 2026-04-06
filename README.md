@@ -1,23 +1,68 @@
 # OpenChip
 
-OpenChip is a production-oriented, self-hostable open pet microchip registry monorepo. It is designed as a public-good alternative to proprietary registries and includes a Go API, PostgreSQL migrations, a Next.js owner/public portal, and containerized local development.
+OpenChip is a reference implementation of an open, federated pet microchip registry protocol.
+
+It is not just a centralized pet registry app. The goal is to provide a durable, founder-independent recovery layer that can coexist with manufacturer registries and AAHA-style lookup systems while remaining useful as a single-node deployment today.
+
+## What OpenChip Is
+
+- A reference node for a future federated registry network.
+- A practical single-node deployment for owners, shelters, and operators.
+- A protocol-first system built around append-only event history, public/private data separation, and exportability.
+
+## What OpenChip Is Not
+
+- Not a replacement for chip manufacturers.
+- Not a design that assumes one permanent operator or one permanent hosted service.
+- Not a public directory of owner email, phone, or address data.
+
+## Current Architecture
+
+OpenChip is in a migration phase from a centralized CRUD-style registry toward a federation-ready reference node.
+
+Current foundations in the repo:
+
+- `ownership_events` provide append-only event history for critical state changes.
+- `owner_contacts` separate private contact channels from public registry metadata.
+- `organizations` and `nodes` model future independent operators.
+- public snapshot and event-stream exports provide a path toward mirroring and survivability.
+- legacy tables still exist as local projections to keep the current app usable.
+
+Architecture docs:
+
+- [federation.md](/Users/jlsegb/Desktop/openchip/docs/architecture/federation.md)
+- [data-model.md](/Users/jlsegb/Desktop/openchip/docs/architecture/data-model.md)
+- [threat-model.md](/Users/jlsegb/Desktop/openchip/docs/architecture/threat-model.md)
+- [roadmap.md](/Users/jlsegb/Desktop/openchip/docs/architecture/roadmap.md)
 
 ## Stack
 
-- `api/`: Go 1.22, chi, pgx v5, golang-migrate, resend, JWT auth
-- `web/`: Next.js 14 app router, TypeScript, Tailwind CSS
-- `db/`: PostgreSQL 16 migrations
-- `infra/`: Docker Compose for local development and self-hosting
-- `docs/`: OpenAPI 3.0 spec
+- `api/`: Go API, local auth, event/projection writes, export endpoints
+- `web/`: Next.js owner and public portal
+- `db/`: PostgreSQL schema, migrations, and seeds
+- `infra/`: Docker Compose for local development
+- `docs/`: OpenAPI and architecture RFCs
+
+## Privacy Model
+
+- Public lookup must never expose raw owner PII.
+- Owner contact is mediated by default.
+- Trusted organization workflows should also move toward mediated contact by default.
+- Any future direct-contact exception must be explicit, auditable, role-scoped, and easy to disable by policy.
 
 ## Quickstart
 
-1. Run `cp .env.example infra/.env`, then edit `infra/.env`.
+1. Create the local env file:
+
+```bash
+cp .env.example infra/.env
+```
+
 2. Start the stack:
 
 ```bash
 cd infra
-docker compose up --build
+docker-compose up --build
 ```
 
 3. Open:
@@ -26,7 +71,13 @@ docker compose up --build
 - API: [http://localhost:8080](http://localhost:8080)
 - Adminer: [http://localhost:8081](http://localhost:8081)
 
-## Local development without Docker
+4. Check health:
+
+```bash
+curl http://localhost:8080/health
+```
+
+## Local Development Without Docker
 
 ### API
 
@@ -46,41 +97,49 @@ npm run dev
 
 The API expects PostgreSQL 16 and runs migrations automatically on startup.
 
-## API reference
+## Federation-Ready Endpoints
 
-The hand-written OpenAPI document lives at [docs/openapi.yaml](/Users/jlsegb/Desktop/open_registry/openchip/docs/openapi.yaml).
+- `GET /.well-known/openchip-node`
+- `GET /api/v1/federation/snapshot`
+- `GET /api/v1/federation/events`
 
-## Self-hosting guide
+These are phase 1 reference-node surfaces, not a full federation implementation yet.
+
+## Compatibility Endpoints
+
+- `GET /api/v1/aaha/lookup/{chip_id}` remains a compatibility layer.
+- AAHA-style interoperability is not the protocol core.
+
+## API Reference
+
+The OpenAPI document lives at [docs/openapi.yaml](/Users/jlsegb/Desktop/openchip/docs/openapi.yaml).
+
+## Self-Hosting Notes
 
 - Provision PostgreSQL 16.
 - Set `DATABASE_URL`, `JWT_SECRET`, `BASE_URL`, `FROM_EMAIL`, and `ADMIN_EMAIL`.
-- `RESEND_API_KEY` is only required when `DISABLE_EMAIL` is not set to `true`.
-- Add a `RESEND_API_KEY` to enable live transactional email. When `DISABLE_EMAIL=true`, email calls are stubbed for local or test environments.
-- Configure `SHELTER_API_KEYS` as `key:Organization` pairs.
-- Run the API and web containers behind TLS.
-- Back up the PostgreSQL volume regularly.
+- `RESEND_API_KEY` is only required when `DISABLE_EMAIL` is not `true`.
+- Configure `SHELTER_API_KEYS` as `key:Organization` pairs if needed.
+- Run the API and web behind TLS in non-local environments.
+- Back up the database and exported snapshots.
 
-## AAHA federation
+## Security Notes
 
-OpenChip exposes `GET /api/v1/aaha/lookup/{chip_id}` as a provisional federation endpoint. Before production enrollment, validate the payload against the latest AAHA federation requirements and adapt the response shape if their contract has changed.
-
-## Security and privacy notes
-
-- Public lookup responses protect direct contact details and instead support owner notification requests.
-- Lookup contact details are exposed only to authenticated shelter or vet API key callers.
 - Magic links are single-use and expire after 15 minutes.
-- JWTs are signed with HS256 and expire after 30 days.
-- Owner deletion anonymizes the owner record while preserving registry data integrity.
-- The implementation avoids logging full owner contact info.
+- JWTs are node-local session tokens, not federation truth.
+- Owner deletion anonymizes contact details while preserving auditability.
+- Critical state changes should be represented as append-only events.
+- Avoid logging full owner contact data.
 
 ## Contributing
 
-1. Create a feature branch.
-2. Keep API responses wrapped in `{ data, error }`.
-3. Add or update migrations and OpenAPI docs when changing contracts.
-4. Verify Go formatting, TypeScript checks, and container builds before opening a PR.
+1. Inspect the existing implementation before making major changes.
+2. Update [docs/architecture/](/Users/jlsegb/Desktop/openchip/docs/architecture) before changing schema or API behavior.
+3. Update [docs/openapi.yaml](/Users/jlsegb/Desktop/openchip/docs/openapi.yaml) when endpoints change.
+4. Run the relevant build/test commands before marking work complete.
+5. Summarize what changed, what remains centralized, and what federation path the work enables next.
 
-## Repository layout
+## Repository Layout
 
 ```text
 openchip/
@@ -90,4 +149,5 @@ openchip/
   db/
   docs/
   .env.example
+  AGENTS.md
 ```
