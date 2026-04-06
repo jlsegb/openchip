@@ -251,7 +251,6 @@ func (s *Server) shelterFound(w http.ResponseWriter, r *http.Request) {
 			"species":            item.Species,
 			"breed":              item.Breed,
 			"color":              item.Color,
-			"owner_name":         item.OwnerName,
 			"manufacturer_hint":  item.Manufacturer,
 			"contact_owner_via":  "mediated_notification",
 			"contact_visibility": "protected",

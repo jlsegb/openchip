@@ -237,7 +237,7 @@ components:
           type: string
     ShelterLookupRegistration:
       type: object
-      required: [pet_name, species, owner_name, manufacturer_hint, contact_owner_via, contact_visibility]
+      required: [pet_name, species, manufacturer_hint, contact_owner_via, contact_visibility]
       properties:
         pet_name:
           type: string
@@ -249,8 +249,6 @@ components:
         color:
           type: string
           nullable: true
-        owner_name:
-          type: string
         manufacturer_hint:
           type: string
         contact_owner_via:

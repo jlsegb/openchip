@@ -195,6 +195,9 @@ func TestShelterLookupUsesMediatedContactWithValidAPIKey(t *testing.T) {
 	if _, ok := first["owner_phone"]; ok {
 		t.Fatalf("shelter lookup should not expose owner phone")
 	}
+	if _, ok := first["owner_name"]; ok {
+		t.Fatalf("shelter lookup should not expose owner name")
+	}
 	if first["contact_owner_via"] != "mediated_notification" {
 		t.Fatalf("unexpected contact mode: %#v", first["contact_owner_via"])
 	}
