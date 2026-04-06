@@ -7,3 +7,4 @@ coverage
 dist
 bin
 security_best_practices_report.md
+openchip-threat-model.md
