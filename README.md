@@ -49,6 +49,7 @@ Architecture docs:
 - Owner contact is mediated by default.
 - Trusted organization workflows should also move toward mediated contact by default.
 - Any future direct-contact exception must be explicit, auditable, role-scoped, and easy to disable by policy.
+- Shelter lookup responses are minimized to pet metadata plus mediated-contact semantics; they do not return raw owner contact data or owner names by default.
 
 ## Quickstart
 
@@ -126,7 +127,11 @@ The OpenAPI document lives at [docs/openapi.yaml](/Users/jlsegb/Desktop/openchip
 ## Security Notes
 
 - Magic links are single-use and expire after 15 minutes.
+- Magic-link completion is a deliberate `POST` flow rather than a side-effecting `GET`.
+- Browser sessions use an `HttpOnly` cookie; the web app does not persist auth tokens in `localStorage`.
 - JWTs are node-local session tokens, not federation truth.
+- Transfer tokens are hashed at rest before storage.
+- Default owner exports redact lookup requester IP and user-agent metadata.
 - Owner deletion anonymizes contact details while preserving auditability.
 - Critical state changes should be represented as append-only events.
 - Avoid logging full owner contact data.
