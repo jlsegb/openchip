@@ -687,12 +687,6 @@ func (s *Store) CreateDispute(ctx context.Context, chipID, reporterName, reporte
 	if err != nil {
 		return err
 	}
-	if _, err := s.db.Exec(c, `
-		UPDATE registration_claims SET status = 'disputed', updated_at = now()
-		WHERE chip_id = $1 AND status = 'active'
-	`, chipPK); err != nil {
-		return err
-	}
 	return s.appendEvent(c, "chip", chipPK, "dispute_opened", map[string]interface{}{
 		"dispute_id":      disputeID,
 		"reporter_name":   reporterName,
@@ -774,6 +768,14 @@ func (s *Store) UpdateDispute(ctx context.Context, id, status, resolutionNote st
 	`, id, status, resolutionNote).Scan(&chipID)
 	if err != nil {
 		return err
+	}
+	if status == "reviewing" {
+		if _, err := s.db.Exec(c, `
+			UPDATE registration_claims SET status = 'disputed', updated_at = now()
+			WHERE chip_id = $1 AND status = 'active'
+		`, chipID); err != nil {
+			return err
+		}
 	}
 	if status == "resolved" {
 		if _, err := s.db.Exec(c, `
